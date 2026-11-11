@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Install native Node.js
@@ -43,6 +43,7 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-cppwinrt
             mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-libtiff
             mingw-w64-ucrt-x86_64-MinHook
             mingw-w64-ucrt-x86_64-miniupnpc
             mingw-w64-ucrt-x86_64-ninja
