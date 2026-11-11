@@ -1660,6 +1660,7 @@ namespace config {
     int_f(vars, "vk_rc_mode", video.vk.rc_mode);
 
     string_f(vars, "capture", video.capture);
+    int_f(vars, "ddx_crop_size", video.ddx_crop_size);
     string_f(vars, "encoder", video.encoder);
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);

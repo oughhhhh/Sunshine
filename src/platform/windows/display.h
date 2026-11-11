@@ -15,6 +15,7 @@
 #include <winrt/windows.graphics.capture.h>
 
 // local includes
+#include "capture_region.h"
 #include "src/platform/common.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -523,6 +524,16 @@ namespace platf::dxgi {
 
     D3D11_MAPPED_SUBRESOURCE img_info;  ///< CPU mapping information for the captured texture.
     texture2d_t texture;  ///< D3D11 texture backing the captured frame.
+
+  protected:
+    /**
+     * @brief Finalize a RAM image using its output row pitch.
+     * @param img Image to allocate or update.
+     * @param dummy Whether the image is a blank placeholder.
+     * @param row_pitch Destination stride in bytes for a captured frame.
+     * @return Zero on success or a negative error status.
+     */
+    int complete_img(img_t *img, bool dummy, int row_pitch);
   };
 
   /**
@@ -587,15 +598,33 @@ namespace platf::dxgi {
     dup_t dup;  ///< Desktop Duplication capture session.
     bool has_frame {};  ///< Whether a frame is currently held by the duplication object.
     std::chrono::steady_clock::time_point last_protected_content_warning_time {};  ///< Last protected content warning time.
+    capture_region_t region;  ///< Selected rectangle in oriented desktop coordinates.
+    capture_rotation_e rotation = capture_rotation_e::identity;  ///< Rotation from the duplication texture to the desktop.
 
     /**
-     * @brief Initialize WGC capture for the selected display.
+     * @brief Initialize Desktop Duplication and its capture region for the selected display.
      *
      * @param display Display object or identifier associated with the operation.
      * @param config Configuration values to apply.
      * @return 0 on success; nonzero or negative platform status on failure.
      */
     int init(display_base_t *display, const ::video::config_t &config);
+
+    /**
+     * @brief Check the full texture dimensions before copying a duplication frame.
+     * @param desc Acquired texture description.
+     * @return True when the desktop geometry still matches the capture session.
+     */
+    bool source_size_matches(const D3D11_TEXTURE2D_DESC &desc) const;
+
+    /**
+     * @brief Copy the capture region from an acquired texture into a capture-sized texture.
+     * @param context D3D11 context used for the copy.
+     * @param destination Texture sized for the capture region in duplication coordinates.
+     * @param source Full desktop texture from Desktop Duplication.
+     */
+    void copy_frame(ID3D11DeviceContext *context, ID3D11Texture2D *destination, ID3D11Texture2D *source) const;
+
     /**
      * @brief Acquire the next frame from the Windows capture backend.
      *
@@ -620,6 +649,9 @@ namespace platf::dxgi {
     capture_e release_frame();
 
     ~duplication_t();
+
+  private:
+    capture_region_t source_region;  ///< Capture rectangle and full dimensions in duplication texture coordinates.
   };
 
   /**

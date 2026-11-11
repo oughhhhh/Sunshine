@@ -127,6 +127,27 @@ namespace platf::dxgi {
     BOOST_LOG(info) << "Desktop resolution ["sv << dup_desc.ModeDesc.Width << 'x' << dup_desc.ModeDesc.Height << ']';
     BOOST_LOG(info) << "Desktop format ["sv << display->dxgi_format_to_string(dup_desc.ModeDesc.Format) << ']';
 
+    try {
+      region = capture_region(display->width, display->height, config::video.ddx_crop_size);
+    } catch (const std::invalid_argument &ex) {
+      BOOST_LOG(error) << "Unable to initialize Desktop Duplication capture region: "sv << ex.what();
+      return -1;
+    }
+
+    const auto quarter_turns = display->display_rotation == DXGI_MODE_ROTATION_UNSPECIFIED ? 0 : display->display_rotation - DXGI_MODE_ROTATION_IDENTITY;
+    rotation = static_cast<capture_rotation_e>(quarter_turns);
+    source_region = duplication_region(region, rotation);
+    display->width = region.width;
+    display->height = region.height;
+    display->width_before_rotation = source_region.width;
+    display->height_before_rotation = source_region.height;
+    display->offset_x += region.x;
+    display->offset_y += region.y;
+
+    if (region.is_cropped()) {
+      BOOST_LOG(info) << "Desktop Duplication crop ["sv << region.width << 'x' << region.height << " at "sv << region.x << ',' << region.y << ']';
+    }
+
     display->display_refresh_rate = dup_desc.ModeDesc.RefreshRate;
     double display_refresh_rate_decimal = (double) display->display_refresh_rate.Numerator / display->display_refresh_rate.Denominator;
     BOOST_LOG(info) << "Display refresh rate [" << display_refresh_rate_decimal << "Hz]";
@@ -139,6 +160,32 @@ namespace platf::dxgi {
     }
     display->display_refresh_rate_rounded = lround(display_refresh_rate_decimal);
     return 0;
+  }
+
+  bool duplication_t::source_size_matches(const D3D11_TEXTURE2D_DESC &desc) const {
+    if (desc.Width == static_cast<UINT>(source_region.full_width) && desc.Height == static_cast<UINT>(source_region.full_height)) {
+      return true;
+    }
+
+    BOOST_LOG(info) << "Capture size changed ["sv << source_region.full_width << 'x' << source_region.full_height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+    return false;
+  }
+
+  void duplication_t::copy_frame(ID3D11DeviceContext *context, ID3D11Texture2D *destination, ID3D11Texture2D *source) const {
+    if (!source_region.is_cropped()) {
+      context->CopyResource(destination, source);
+      return;
+    }
+
+    const D3D11_BOX box {
+      .left = static_cast<UINT>(source_region.x),
+      .top = static_cast<UINT>(source_region.y),
+      .front = 0,
+      .right = static_cast<UINT>(source_region.x + source_region.width),
+      .bottom = static_cast<UINT>(source_region.y + source_region.height),
+      .back = 1,
+    };
+    context->CopySubresourceRegion(destination, 0, 0, 0, 0, source, 0, &box);
   }
 
   capture_e duplication_t::next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p) {
@@ -1014,7 +1061,14 @@ namespace platf {
    * @param hwdevice_type enables possible use of hardware encoder
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (config::video.capture == "ddx" || config::video.capture.empty()) {
+    const auto &capture = config::video.capture;
+    const bool crop_requested = config::video.ddx_crop_size != 0;
+    if (crop_requested && !capture.empty() && capture != "ddx") {
+      BOOST_LOG(error) << "ddx_crop_size requires Desktop Duplication capture (ddx)"sv;
+      return nullptr;
+    }
+
+    if (capture == "ddx" || capture.empty()) {
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
 
@@ -1030,7 +1084,7 @@ namespace platf {
       }
     }
 
-    if (config::video.capture == "wgc" || config::video.capture.empty()) {
+    if (!crop_requested && (capture == "wgc" || capture.empty())) {
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
 

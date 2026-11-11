@@ -1,0 +1,88 @@
+---
+name: Build Sunshine Desktop Duplication crop
+
+'on':
+  push:
+    branches:
+      - codex/sunshine-ddx-crop
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Check out Sunshine
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install native Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - name: Locate native Node.js
+        shell: pwsh
+        run: |
+          $nodeDirectory = Split-Path (Get-Command node.exe).Source -Parent
+          "SUNSHINE_NODE_DIRECTORY=$nodeDirectory" >> $env:GITHUB_ENV
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-toolchain
+
+      - name: Build Sunshine
+        shell: msys2 {0}
+        env:
+          BRANCH: ${{ github.ref_name }}
+          BUILD_VERSION: '2026.906.222525'
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export PATH="$(cygpath -u "$SUNSHINE_NODE_DIRECTORY"):$PATH"
+          cmake -S . -B cmake-build-ucrt64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_DOCS=OFF -DBUILD_TESTS=ON \
+            -DSUNSHINE_ASSETS_DIR=assets
+          cmake --build cmake-build-ucrt64 --parallel
+
+      - name: Test crop geometry and rotated frame copies
+        shell: msys2 {0}
+        working-directory: cmake-build-ucrt64/tests
+        run: ./test_sunshine.exe --gtest_filter='CaptureRegionTest.*'
+
+      - name: Package Windows build
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cpack --config cmake-build-ucrt64/CPackConfig.cmake -G ZIP -B artifacts
+          mv artifacts/Sunshine.zip artifacts/Sunshine-Windows-AMD64-ddx-crop.zip
+
+      - name: Upload the portable package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Sunshine-Windows-AMD64-ddx-crop
+          path: artifacts/Sunshine-Windows-AMD64-ddx-crop.zip
+          if-no-files-found: error
+          compression-level: 0

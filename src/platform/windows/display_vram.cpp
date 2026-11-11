@@ -1397,9 +1397,11 @@ namespace platf::dxgi {
     }
 
     if (frame_info.LastMouseUpdateTime.QuadPart) {
-      cursor_alpha.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
-
-      cursor_xor.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
+      const auto &pointer = frame_info.PointerPosition;
+      const auto x = pointer.Position.x - dup.region.x;
+      const auto y = pointer.Position.y - dup.region.y;
+      cursor_alpha.set_pos(x, y, width, height, display_rotation, pointer.Visible);
+      cursor_xor.set_pos(x, y, width, height, display_rotation, pointer.Visible);
     }
 
     const bool blend_mouse_cursor_flag = (cursor_alpha.visible || cursor_xor.visible) && cursor_visible;
@@ -1418,8 +1420,7 @@ namespace platf::dxgi {
 
       // It's possible for our display enumeration to race with mode changes and result in
       // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
-      if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
-        BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+      if (!dup.source_size_matches(desc)) {
         return capture_e::reinit;
       }
 
@@ -1626,7 +1627,7 @@ namespace platf::dxgi {
             return capture_e::error;
           }
 
-          device_ctx->CopyResource(d3d_img->capture_texture.get(), src.get());
+          dup.copy_frame(device_ctx.get(), d3d_img->capture_texture.get(), src.get());
           last_frame_variant = img;
           break;
         }
@@ -1641,7 +1642,7 @@ namespace platf::dxgi {
               return capture_e::error;
             }
           }
-          device_ctx->CopyResource(p_surface->get(), src.get());
+          dup.copy_frame(device_ctx.get(), p_surface->get(), src.get());
           break;
         }
     }

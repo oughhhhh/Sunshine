@@ -30,65 +30,24 @@ namespace platf::dxgi {
    *
    * @param cursor Cursor image or visibility state to composite.
    * @param img Image or frame object to read from or populate.
+   * @param bounds Visible portion of the cursor in frame coordinates.
    */
-  void blend_cursor_monochrome(const cursor_t &cursor, img_t &img) {
-    int height = cursor.shape_info.Height / 2;
-    int width = cursor.shape_info.Width;
-    int pitch = cursor.shape_info.Pitch;
+  void blend_cursor_monochrome(const cursor_t &cursor, img_t &img, const RECT &bounds) {
+    const auto mask_height = cursor.shape_info.Height / 2;
+    const auto pitch = cursor.shape_info.Pitch;
 
-    // img cursor.{x,y} < 0, skip parts of the cursor.img_data
-    auto cursor_skip_y = -std::min(0, cursor.y);
-    auto cursor_skip_x = -std::min(0, cursor.x);
+    for (LONG y = bounds.top; y < bounds.bottom; ++y) {
+      const auto *and_mask = cursor.img_data.data() + (y - cursor.y) * pitch;
+      const auto *xor_mask = and_mask + mask_height * pitch;
+      auto *pixel = reinterpret_cast<int *>(img.data + y * img.row_pitch) + bounds.left;
 
-    // img cursor.{x,y} > img.{x,y}, truncate parts of the cursor.img_data
-    auto cursor_truncate_y = std::max(0, cursor.y - img.height);
-    auto cursor_truncate_x = std::max(0, cursor.x - img.width);
-
-    auto cursor_width = width - cursor_skip_x - cursor_truncate_x;
-    auto cursor_height = height - cursor_skip_y - cursor_truncate_y;
-
-    if (cursor_height > height || cursor_width > width) {
-      return;
-    }
-
-    auto img_skip_y = std::max(0, cursor.y);
-    auto img_skip_x = std::max(0, cursor.x);
-
-    auto cursor_img_data = cursor.img_data.data() + cursor_skip_y * pitch;
-
-    int delta_height = std::min(cursor_height - cursor_truncate_y, std::max(0, img.height - img_skip_y));
-    int delta_width = std::min(cursor_width - cursor_truncate_x, std::max(0, img.width - img_skip_x));
-
-    auto pixels_per_byte = width / pitch;
-    auto bytes_per_row = delta_width / pixels_per_byte;
-
-    auto img_data = (int *) img.data;
-    for (int i = 0; i < delta_height; ++i) {
-      auto and_mask = &cursor_img_data[i * pitch];
-      auto xor_mask = &cursor_img_data[(i + height) * pitch];
-
-      auto img_pixel_p = &img_data[(i + img_skip_y) * (img.row_pitch / img.pixel_pitch) + img_skip_x];
-
-      auto skip_x = cursor_skip_x;
-      for (int x = 0; x < bytes_per_row; ++x) {
-        for (auto bit = 0u; bit < 8; ++bit) {
-          if (skip_x > 0) {
-            --skip_x;
-
-            continue;
-          }
-
-          int and_ = *and_mask & (1 << (7 - bit)) ? -1 : 0;
-          int xor_ = *xor_mask & (1 << (7 - bit)) ? -1 : 0;
-
-          *img_pixel_p &= and_;
-          *img_pixel_p ^= xor_;
-
-          ++img_pixel_p;
-        }
-
-        ++and_mask;
-        ++xor_mask;
+      for (LONG x = bounds.left; x < bounds.right; ++x) {
+        const auto cursor_x = x - cursor.x;
+        const auto mask_byte = cursor_x / 8;
+        const auto mask_bit = 0x80 >> (cursor_x % 8);
+        *pixel &= (and_mask[mask_byte] & mask_bit) ? -1 : 0;
+        *pixel ^= (xor_mask[mask_byte] & mask_bit) ? -1 : 0;
+        ++pixel;
       }
     }
   }
@@ -135,50 +94,21 @@ namespace platf::dxgi {
    *
    * @param cursor Cursor image or visibility state to composite.
    * @param img Image or frame object to read from or populate.
+   * @param bounds Visible portion of the cursor in frame coordinates.
    * @param masked Whether the cursor image uses an AND/XOR mask.
    */
-  void blend_cursor_color(const cursor_t &cursor, img_t &img, const bool masked) {
-    int height = cursor.shape_info.Height;
-    int width = cursor.shape_info.Width;
-    int pitch = cursor.shape_info.Pitch;
+  void blend_cursor_color(const cursor_t &cursor, img_t &img, const RECT &bounds, bool masked) {
+    const auto pitch = cursor.shape_info.Pitch;
+    const auto apply_pixel = masked ? apply_color_masked : apply_color_alpha;
 
-    // img cursor.y < 0, skip parts of the cursor.img_data
-    auto cursor_skip_y = -std::min(0, cursor.y);
-    auto cursor_skip_x = -std::min(0, cursor.x);
-
-    // img cursor.{x,y} > img.{x,y}, truncate parts of the cursor.img_data
-    auto cursor_truncate_y = std::max(0, cursor.y - img.height);
-    auto cursor_truncate_x = std::max(0, cursor.x - img.width);
-
-    auto img_skip_y = std::max(0, cursor.y);
-    auto img_skip_x = std::max(0, cursor.x);
-
-    auto cursor_width = width - cursor_skip_x - cursor_truncate_x;
-    auto cursor_height = height - cursor_skip_y - cursor_truncate_y;
-
-    if (cursor_height > height || cursor_width > width) {
-      return;
-    }
-
-    auto cursor_img_data = (int *) &cursor.img_data[cursor_skip_y * pitch];
-
-    int delta_height = std::min(cursor_height - cursor_truncate_y, std::max(0, img.height - img_skip_y));
-    int delta_width = std::min(cursor_width - cursor_truncate_x, std::max(0, img.width - img_skip_x));
-
-    auto img_data = (int *) img.data;
-
-    for (int i = 0; i < delta_height; ++i) {
-      auto cursor_begin = &cursor_img_data[i * cursor.shape_info.Width + cursor_skip_x];
-      auto cursor_end = &cursor_begin[delta_width];
-
-      auto img_pixel_p = &img_data[(i + img_skip_y) * (img.row_pitch / img.pixel_pitch) + img_skip_x];
+    for (LONG y = bounds.top; y < bounds.bottom; ++y) {
+      const auto *cursor_row = reinterpret_cast<const int *>(cursor.img_data.data() + (y - cursor.y) * pitch);
+      const auto *cursor_begin = cursor_row + (bounds.left - cursor.x);
+      const auto *cursor_end = cursor_begin + (bounds.right - bounds.left);
+      auto *pixel = reinterpret_cast<int *>(img.data + y * img.row_pitch) + bounds.left;
       std::for_each(cursor_begin, cursor_end, [&](int cursor_pixel) {
-        if (masked) {
-          apply_color_masked(img_pixel_p, cursor_pixel);
-        } else {
-          apply_color_alpha(img_pixel_p, cursor_pixel);
-        }
-        ++img_pixel_p;
+        apply_pixel(pixel, cursor_pixel);
+        ++pixel;
       });
     }
   }
@@ -190,15 +120,25 @@ namespace platf::dxgi {
    * @param img Image or frame object to read from or populate.
    */
   void blend_cursor(const cursor_t &cursor, img_t &img) {
+    const auto shape_width = static_cast<LONG>(cursor.shape_info.Width);
+    const int mask_planes = cursor.shape_info.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME ? 2 : 1;
+    const auto shape_height = static_cast<LONG>(cursor.shape_info.Height) / mask_planes;
+    const RECT frame_bounds {0, 0, img.width, img.height};
+    const RECT cursor_bounds {cursor.x, cursor.y, cursor.x + shape_width, cursor.y + shape_height};
+    RECT bounds;
+    if (!IntersectRect(&bounds, &frame_bounds, &cursor_bounds)) {
+      return;
+    }
+
     switch (cursor.shape_info.Type) {
       case DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR:
-        blend_cursor_color(cursor, img, false);
+        blend_cursor_color(cursor, img, bounds, false);
         break;
       case DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME:
-        blend_cursor_monochrome(cursor, img);
+        blend_cursor_monochrome(cursor, img, bounds);
         break;
       case DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR:
-        blend_cursor_color(cursor, img, true);
+        blend_cursor_color(cursor, img, bounds, true);
         break;
       default:
         BOOST_LOG(warning) << "Unsupported cursor format ["sv << cursor.shape_info.Type << ']';
@@ -246,8 +186,8 @@ namespace platf::dxgi {
     }
 
     if (frame_info.LastMouseUpdateTime.QuadPart) {
-      cursor.x = frame_info.PointerPosition.Position.x;
-      cursor.y = frame_info.PointerPosition.Position.y;
+      cursor.x = frame_info.PointerPosition.Position.x - dup.region.x;
+      cursor.y = frame_info.PointerPosition.Position.y - dup.region.y;
       cursor.visible = frame_info.PointerPosition.Visible;
     }
 
@@ -264,19 +204,21 @@ namespace platf::dxgi {
         D3D11_TEXTURE2D_DESC desc;
         src->GetDesc(&desc);
 
+        // Validate the full acquired texture before copying the region.
+        if (!dup.source_size_matches(desc)) {
+          return capture_e::reinit;
+        }
+
         // If we don't know the capture format yet, grab it from this texture and create the staging texture
         if (capture_format == DXGI_FORMAT_UNKNOWN) {
-          capture_format = desc.Format;
-          BOOST_LOG(info) << "Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
-
           D3D11_TEXTURE2D_DESC t {};
-          t.Width = width;
-          t.Height = height;
+          t.Width = width_before_rotation;
+          t.Height = height_before_rotation;
           t.MipLevels = 1;
           t.ArraySize = 1;
           t.SampleDesc.Count = 1;
           t.Usage = D3D11_USAGE_STAGING;
-          t.Format = capture_format;
+          t.Format = desc.Format;
           t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
           auto status = device->CreateTexture2D(&t, nullptr, &texture);
@@ -285,13 +227,9 @@ namespace platf::dxgi {
             BOOST_LOG(error) << "Failed to create staging texture [0x"sv << util::hex(status).to_string_view() << ']';
             return capture_e::error;
           }
-        }
 
-        // It's possible for our display enumeration to race with mode changes and result in
-        // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
-        if (desc.Width != width || desc.Height != height) {
-          BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
-          return capture_e::reinit;
+          capture_format = desc.Format;
+          BOOST_LOG(info) << "Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
         }
 
         // It's also possible for the capture format to change on the fly. If that happens,
@@ -301,8 +239,7 @@ namespace platf::dxgi {
           return capture_e::reinit;
         }
 
-        // Copy from GPU to CPU
-        device_ctx->CopyResource(texture.get(), src.get());
+        dup.copy_frame(device_ctx.get(), texture.get(), src.get());
       }
     }
 
@@ -328,13 +265,14 @@ namespace platf::dxgi {
       }
 
       // Now that we know the capture format, we can finish creating the image
-      if (complete_img(img, false)) {
+      const int row_pitch = dup.rotation == capture_rotation_e::identity ? static_cast<int>(img_info.RowPitch) : width * get_pixel_pitch();
+      if (complete_img(img, false, row_pitch)) {
         device_ctx->Unmap(texture.get(), 0);
         img_info.pData = nullptr;
         return capture_e::error;
       }
 
-      std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
+      copy_captured_frame(static_cast<const std::uint8_t *>(img_info.pData), img_info.RowPitch, img->data, img->row_pitch, width, height, img->pixel_pitch, dup.rotation);
 
       // Unmap the staging texture to allow GPU access again
       device_ctx->Unmap(texture.get(), 0);
@@ -367,6 +305,10 @@ namespace platf::dxgi {
   }
 
   int display_ram_t::complete_img(platf::img_t *img, bool dummy) {
+    return complete_img(img, dummy, dummy ? 0 : static_cast<int>(img_info.RowPitch));
+  }
+
+  int display_ram_t::complete_img(platf::img_t *img, bool dummy, int row_pitch) {
     // If this is not a dummy image, we must know the format by now
     if (!dummy && capture_format == DXGI_FORMAT_UNKNOWN) {
       BOOST_LOG(error) << "display_ram_t::complete_img() called with unknown capture format!";
@@ -381,9 +323,9 @@ namespace platf::dxgi {
     }
 
     // Reallocate the image buffer if the pitch changes
-    if (!dummy && img->row_pitch != img_info.RowPitch) {
-      img->row_pitch = img_info.RowPitch;
-      delete img->data;
+    if (!dummy && img->row_pitch != row_pitch) {
+      img->row_pitch = row_pitch;
+      delete[] img->data;
       img->data = nullptr;
     }
 

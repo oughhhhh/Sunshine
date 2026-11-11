@@ -2190,6 +2190,19 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### ddx_crop_size
+
+Set the side length in pixels of a centered square on the selected Windows display. Sunshine limits the side to the
+shorter display dimension. The default, `0`, captures the entire display. The crop is scaled to fit the client's
+requested stream resolution with its aspect ratio preserved.
+
+This setting requires DirectX Desktop Duplication. With automatic capture selection, a nonzero value selects `ddx`.
+
+```ini
+capture = ddx
+ddx_crop_size = 640
+```
+
 ### encoder
 
 <table>
